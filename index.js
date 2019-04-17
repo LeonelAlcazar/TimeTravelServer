@@ -1,5 +1,8 @@
 var port = process.env.PORT || 3000;
-var io = require('socket.io')(port);
+var express = require('express');
+var app = express();
+var server = require('http').createServer(app);
+var io = require('socket.io')(server);
 var shortid = require('shortid');
 const mongoose = require('mongoose');
 const SHA256 = require('crypto-js/sha256');
@@ -8,7 +11,7 @@ mongoose.connect("mongodb://Admin:administrador123@ds163825.mlab.com:63825/timet
     .then(db => console.log('Connected to DB'))
     .catch(err => console.log("DB ERROR: ",err));
 
-console.log("Run on " + port);
+
 
 var ClientsIds = [];
 var Rooms = [];
@@ -17,6 +20,20 @@ var Maps = [];
 const User = require('../TimeTravelServer/models/user.js');
 const map = require('../TimeTravelServer/models/map.js');
 
+app.post('/Clients', (req,res,next) => {
+    res.json(ClientsIds);
+});
+app.post('/Rooms', (req,res,next) => {
+    res.json(Rooms);
+});
+app.post('/Maps', (req,res,next) => {
+    res.json(Maps);
+});
+
+
+server.listen(port);
+
+console.log("Run on " + port);
 
 function Comillas(value){
     var val = value.replace("\"","");
@@ -168,6 +185,24 @@ io.on('connection', (socket) => {
         ClientsIds.splice(ClientsIds.indexOf(socket.thisClientId), 1);
     });
 
+    socket.on('DisconnectRoom', (data) => {
+        Rooms.forEach((room) => {
+            if(room.roomId == socket.room){
+                room.roomPlayers--;
+                room.roomPlayersId.forEach((id) => {
+                    if(id.playerID == socket.thisClientId){
+                        room.roomPlayersId.splice(room.roomPlayersId.indexOf(id),1);
+
+                    }
+                });
+            }
+        });
+
+        socket.leave();
+        socket.room = "Lobby";
+        socket.join(socket.room);
+    });
+
     socket.on('UpdatePlayer', (data) => {
         socket.broadcast.to(socket.room).emit("UpdatePlayer",data);
     });
@@ -177,6 +212,9 @@ io.on('connection', (socket) => {
     });
     socket.on('NoRender',(data) => {
         socket.broadcast.to(socket.room).emit("NoRender",data);
+    });
+    socket.on('Die',(data) => {
+        socket.broadcast.to(socket.room).emit("Die",data);
     });
 
     socket.on('Login', (data) => {
@@ -240,6 +278,13 @@ io.on('connection', (socket) => {
         newMap.objects = data.objects;
         newMap.save();
     });
+
+    // Gets's
+
+    socket.on('GetRoomsAMaps',(data)=>{
+        socket.emit('RoomsUpdate',{rooms:Rooms});
+        socket.emit('MapsUpdate',{maps:Maps});
+    });
 });
 
 setInterval(()=>{
@@ -248,17 +293,17 @@ setInterval(()=>{
     map.find((err,res)=>{
         for(var i = 0; i < res.length;i++){
             Maps.push({MapID:res[i].id,MapName:res[i].name});
-            
         }
         io.sockets.in("Lobby").emit('MapsUpdate',{maps:Maps});
     });
 
-    Rooms.forEach((room)=>{
-        if(room.roomPlayers > 0){
-            io.sockets.connected[room.roomSocketOrigin].emit('Tick',{});
-
-        }
-        
+    Rooms.forEach((room) => {
+        io.in(room.roomId).clients((error, clients) => {
+            if(error) throw error;
+            if(clients.length > 0){
+                io.sockets.connected[clients[0]].emit('Tick',{});
+            }
+        });
     });
     
 },10000);
